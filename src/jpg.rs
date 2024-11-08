@@ -17,6 +17,8 @@ impl FileScraper for JpgScraper {
         JPG_HEADER_1 == raw[..JPG_HEADER_1.len()]
             || JPG_HEADER_2 == raw[..JPG_HEADER_2.len()]
             || JPG_HEADER_3 == raw[..JPG_HEADER_3.len()]
+            || (raw[..4] == [0xFF, 0xD8, 0xFF, 0xE1]
+                && raw[6..12] == [0x45, 0x78, 0x69, 0x66, 0x00, 0x00])
     }
 
     fn file_bytes<'a>(&self, raw: &'a [u8]) -> Option<&'a [u8]> {
