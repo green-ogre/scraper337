@@ -1,6 +1,30 @@
 use std::{process::Command, time::SystemTime};
 
-const PNG_HEADER: [u8; 8] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+use jpg::JpgScraper;
+use png::PngScraper;
+
+mod jpg;
+mod png;
+
+pub trait FileScraper {
+    /// File type extension.
+    fn extension(&self) -> &'static str;
+
+    /// Is a file detectable at the begining of the `raw` slice.
+    ///
+    /// https://en.wikipedia.org/wiki/List_of_file_signatures
+    fn file_detected(&self, raw: &[u8]) -> bool;
+
+    /// Returns the entire file as a byte slice if the data is uncorrupted.
+    ///
+    /// This does NOT guarantee that a file is valid. If it is impractical to verify a file's
+    /// validity, then specify this is [`FileScraper::requires_validation`]
+    fn file_bytes<'a>(&self, raw: &'a [u8]) -> Option<&'a [u8]>;
+
+    fn requires_validation(&self) -> bool {
+        true
+    }
+}
 
 fn main() {
     Command::new("rm")
@@ -15,70 +39,39 @@ fn main() {
         .unwrap();
 
     let start = SystemTime::now();
+
     let raw = std::fs::read("/dev/sdc1").unwrap();
+    let file_scrapers: Vec<Box<dyn FileScraper>> = vec![Box::new(JpgScraper), Box::new(PngScraper)];
 
-    let mut png_headers = Vec::new();
+    for i in 0..raw.len() - 12 {
+        for scraper in file_scrapers.iter() {
+            if scraper.file_detected(&raw[i..]) {
+                let extension = scraper.extension();
+                println!("found {} header at offset {}", extension, i);
+                Command::new("mkdir")
+                    .arg("-p")
+                    .arg(format!("extract/{}", extension))
+                    .output()
+                    .unwrap();
 
-    for i in 0..raw.len() - 8 {
-        // If check short circuits if the beggining of the header is not found
-        if raw[i] == 0x89 && raw[i + 1] == 0x50 && raw[i..i + 8] == PNG_HEADER {
-            println!("found PNG header at offset {}", i);
-            png_headers.push(i);
-        }
-    }
-
-    let end = SystemTime::now().duration_since(start).unwrap_or_default();
-    println!("\nfound {} PNG headers", png_headers.len());
-    println!("megabytes scraped: {}", raw.len() / (1028 * 1028));
-    println!("time: {:#.4}s\n", end.as_secs_f32());
-
-    let start = SystemTime::now();
-    let mut extracted_pngs = 0;
-    for (which_png, start) in png_headers.iter().enumerate() {
-        let mut len = 0;
-        let mut chunk_type = String::new();
-        let mut offset = *start + 8;
-
-        let parse_chunk = |offset: usize, len: &mut u32, chunk_type: &mut String| {
-            *len = u32::from_le_bytes([
-                raw[offset + 3],
-                raw[offset + 2],
-                raw[offset + 1],
-                raw[offset],
-            ]);
-            *chunk_type = format!(
-                "{}{}{}{}",
-                raw[offset + 4] as char,
-                raw[offset + 5] as char,
-                raw[offset + 6] as char,
-                raw[offset + 7] as char
-            );
-            // println!("chunk type: {chunk_type}");
-            // println!("len: {len}");
-        };
-
-        loop {
-            parse_chunk(offset, &mut len, &mut chunk_type);
-            offset += len as usize + 12;
-            if &*chunk_type == "IEND" {
-                break;
+                let name = format!("extract/{}/{}.{}", extension, i, extension);
+                if let Some(bytes) = scraper.file_bytes(&raw[i..]) {
+                    std::fs::write(&name, bytes)
+                        .unwrap_or_else(|_| panic!("could not write file to {}", name));
+                    if scraper.requires_validation()
+                        && image::ImageReader::open(&name).unwrap().decode().is_err()
+                    {
+                        println!("invalid {} generated, deleting...", extension);
+                        std::fs::remove_file(&name).unwrap();
+                    }
+                } else {
+                    println!("could not retrieve file bytes for {}", &name);
+                }
             }
         }
-
-        println!("png {}", which_png + 1);
-        println!("start of png: {start}");
-        println!("end of png:   {offset}");
-        println!("total len:    {}", offset - start);
-
-        std::fs::write(
-            format!("extract/png_{}.png", which_png),
-            &raw[*start..offset],
-        )
-        .expect("could not extract parsed png");
-        extracted_pngs += 1;
     }
-    let end = SystemTime::now().duration_since(start).unwrap_or_default();
 
-    println!("\nextracted {} PNGs", extracted_pngs);
+    let end = SystemTime::now().duration_since(start).unwrap_or_default();
+    println!("\nmegabytes scraped: {}", raw.len() / (1028 * 1028));
     println!("time: {:#.4}s\n", end.as_secs_f32());
 }
