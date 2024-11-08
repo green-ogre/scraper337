@@ -9,6 +9,12 @@ mod png;
 mod scraper;
 mod zip;
 
+// TODO:
+// 1. Fix chunking bounds, what if a file needs the data accross a chunk boundary?
+// 2. Add more common file types.
+// 3. Multithread? Double buffer the data from the drive and process one buffer while the other
+//    is read into.
+
 fn main() {
     Scraper::default()
         .register_scrapers(vec![

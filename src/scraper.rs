@@ -62,12 +62,11 @@ impl Scraper {
 
         let mut chunk = 0;
         loop {
-            // raw.clear();
+            println!("\nAwaiting chunk {chunk}...");
             if file.read_exact(&mut raw).is_err() {
                 break;
             }
-
-            // println!("\nchunk entry: {:?}", &raw[0..16]);
+            println!("Recieved chunk {chunk}, processing...");
 
             for i in 0..raw.len() - 12 {
                 for scraper in self.scrapers.iter() {
