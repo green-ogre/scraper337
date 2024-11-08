@@ -20,6 +20,13 @@ struct Args {
 pub struct Scraper {
     scrapers: Vec<Box<dyn FileScraper>>,
     reports: HashMap<&'static str, FileScraperReport>,
+    chunk: usize,
+    chunk_size: usize,
+    total_chunks: usize,
+    total_invalid_files: usize,
+    total_valid_files: usize,
+    total_megabytes_scraped: f32,
+    total_time: f32,
 }
 
 impl Scraper {
@@ -45,78 +52,94 @@ impl Scraper {
             .output()
             .unwrap();
 
-        let start = SystemTime::now();
-
         let args = Args::parse();
 
-        // 512M
         let chunk_size = 1024 * 1024 * args.chunk_size;
+        self.chunk_size = chunk_size;
+        let mut raw_read = vec![0; chunk_size];
         let mut raw = vec![0; chunk_size];
         let mut file = std::fs::File::open(&args.drive_path).unwrap();
         let total_size = get_drive_size(&file).unwrap_or_default() as usize;
-        let total_chunks = total_size / chunk_size;
+        self.total_chunks = total_size / chunk_size;
 
-        let mut total_megabytes_scraped = 0.;
-        let mut total_invalid_files = 0;
-        let mut total_valid_files = 0;
+        file.read_exact(&mut raw).unwrap();
 
-        let mut chunk = 0;
+        let start = SystemTime::now();
         loop {
-            println!("\nAwaiting chunk {chunk}...");
-            if file.read_exact(&mut raw).is_err() {
+            if std::thread::scope(|s| {
+                let read_result = s.spawn(|| file.read_exact(&mut raw_read));
+                self.process_chunk(&raw, &start);
+
+                read_result.join()
+            })
+            .is_err()
+            {
                 break;
             }
-            println!("Recieved chunk {chunk}, processing...");
 
-            for i in 0..raw.len() - 12 {
-                for scraper in self.scrapers.iter() {
-                    if scraper.file_detected(&raw[i..]) {
-                        let extension = scraper.extension();
-                        // println!("found {} header at offset {}", extension, i);
-                        let name = format!("extract/{}/{}.{}", extension, i, extension);
-                        if let Some(bytes) = scraper.file_bytes(&raw[i..]) {
-                            Command::new("mkdir")
-                                .arg("-p")
-                                .arg(format!("extract/{}", extension))
-                                .output()
-                                .unwrap();
+            std::mem::swap(&mut raw, &mut raw_read);
+            self.chunk += 1;
+        }
+    }
 
-                            std::fs::write(&name, bytes)
-                                .unwrap_or_else(|_| panic!("could not write file to {}", name));
-                            if scraper.requires_validation()
-                                && image::ImageReader::open(&name).unwrap().decode().is_err()
-                            {
-                                self.reports.get_mut(&extension).unwrap().invalid_files += 1;
-                                total_invalid_files += 1;
-                                // println!("invalid {} generated, deleting...", extension);
-                                std::fs::remove_file(&name).unwrap();
-                            } else {
-                                self.reports.get_mut(&extension).unwrap().valid_files += 1;
-                                total_valid_files += 1;
-                            }
+    fn process_chunk(&mut self, raw: &[u8], start: &SystemTime) {
+        for i in 0..raw.len() - 12 {
+            for scraper in self.scrapers.iter() {
+                if scraper.file_detected(&raw[i..]) {
+                    let extension = scraper.extension();
+                    // println!("found {} header at offset {}", extension, i);
+                    let name = format!("extract/{}/{}.{}", extension, i, extension);
+                    if let Some(bytes) = scraper.file_bytes(&raw[i..]) {
+                        Command::new("mkdir")
+                            .arg("-p")
+                            .arg(format!("extract/{}", extension))
+                            .output()
+                            .unwrap();
+
+                        std::fs::write(&name, bytes)
+                            .unwrap_or_else(|_| panic!("could not write file to {}", name));
+                        if scraper.requires_validation()
+                            && image::ImageReader::open(&name).unwrap().decode().is_err()
+                        {
+                            self.reports.get_mut(&extension).unwrap().invalid_files += 1;
+                            self.total_invalid_files += 1;
+                            // println!("invalid {} generated, deleting...", extension);
+                            std::fs::remove_file(&name).unwrap();
                         } else {
-                            // println!("could not retrieve file bytes for {}", &name);
+                            self.reports.get_mut(&extension).unwrap().valid_files += 1;
+                            self.total_valid_files += 1;
                         }
+                    } else {
+                        // println!("could not retrieve file bytes for {}", &name);
                     }
                 }
             }
+        }
 
-            let end = SystemTime::now().duration_since(start).unwrap_or_default();
-            let megabytes_scraped = raw.len() as f32 / (1028. * 1028.);
-            total_megabytes_scraped += megabytes_scraped;
+        self.total_time = SystemTime::now()
+            .duration_since(*start)
+            .unwrap_or_default()
+            .as_secs_f32();
+        self.total_megabytes_scraped += raw.len() as f32 / (1028. * 1028.);
+        self.chunk_report();
+    }
 
-            println!("\n------------------- Chunk {chunk}/{total_chunks} -------------------");
-            println!("chunk size:\t\t\t{megabytes_scraped:.2}");
-            println!("total megabytes scraped:\t{total_megabytes_scraped:.2}");
-            println!("total invalid files:\t\t{total_invalid_files}");
-            println!("total valid files:\t\t{total_valid_files}");
-            println!("total time:\t\t\t{:#.2}s", end.as_secs_f32());
-            println!("Scraper reports:");
-            for (ext, report) in self.reports.iter() {
-                println!("\t{ext}\t::\t{report:?}");
-            }
-
-            chunk += 1;
+    fn chunk_report(&self) {
+        println!(
+            "\n------------------- Chunk {}/{} -------------------",
+            self.chunk, self.total_chunks
+        );
+        println!("chunk size:\t\t\t{}", self.chunk_size);
+        println!(
+            "total megabytes scraped:\t{:.2}",
+            self.total_megabytes_scraped
+        );
+        println!("total invalid files:\t\t{}", self.total_invalid_files);
+        println!("total valid files:\t\t{}", self.total_valid_files);
+        println!("total time:\t\t\t{:#.2}s", self.total_time);
+        println!("Scraper reports:");
+        for (ext, report) in self.reports.iter() {
+            println!("\t{ext}\t::\t{report:?}");
         }
     }
 }
