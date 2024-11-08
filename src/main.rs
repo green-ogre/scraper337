@@ -1,7 +1,6 @@
-use std::{process::Command, time::SystemTime};
-
 use jpg::JpgScraper;
 use png::PngScraper;
+use std::{process::Command, time::SystemTime};
 
 mod jpg;
 mod png;
@@ -40,7 +39,15 @@ fn main() {
 
     let start = SystemTime::now();
 
-    let raw = std::fs::read("/dev/sdc1").unwrap();
+    let usage = "Usage: scraper337 [<path/to/drive>], e.g. scraper337 /dev/sdc1";
+    if std::env::args().len() > 2 {
+        panic!("Too many arguments.\n{}", usage);
+    }
+    let drive = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| panic!("Drive path not specified.\n{}", usage));
+
+    let raw = std::fs::read(drive).unwrap();
     let file_scrapers: Vec<Box<dyn FileScraper>> = vec![Box::new(JpgScraper), Box::new(PngScraper)];
 
     for i in 0..raw.len() - 12 {
