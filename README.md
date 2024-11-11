@@ -38,6 +38,10 @@ For more info see the help:
 $ ./target/release/scraper337 --help
 ```
 
+## How do I find my drive as a device?
+
+On Linux systems, run `lsblk` to list all active drive devices on the system. If connecting to the drive externally, it is most likely to be the last or one of the last devices listed.
+
 ## Why do you need **sudo** privilege?
 
 A mounted file system can be accessed through the /media directory on a Linux system without **sudo**. So why do we use a device (/dev) instead of a mounted file system (/media)?
