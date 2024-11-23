@@ -1,6 +1,4 @@
 use file_scraper::FileScraper;
-use jpg::JpgScraper;
-use png::PngScraper;
 use scraper::Scraper;
 
 pub mod file_scraper;
@@ -16,8 +14,8 @@ mod zip;
 fn main() {
     Scraper::default()
         .register_scrapers(vec![
-            Box::new(JpgScraper),
-            Box::new(PngScraper),
+            Box::new(jpg::JpgScraper),
+            Box::new(png::PngScraper),
             Box::new(file_scraper::WavScraper),
             Box::new(file_scraper::AiffScraper),
             Box::new(file_scraper::PdfScraper),

@@ -14,19 +14,27 @@ struct Args {
     /// Size of a chunk in megabytes
     #[arg(short, long, default_value_t = 512)]
     chunk_size: usize,
+
+    /// The minimum length necessary to extract a plain text sequence
+    #[arg(short, long, default_value_t = 100)]
+    min_pt_len: usize,
 }
 
 #[derive(Default)]
 pub struct Scraper {
     scrapers: Vec<Box<dyn FileScraper>>,
     reports: HashMap<&'static str, FileScraperReport>,
+
     chunk: usize,
     chunk_size: usize,
     total_chunks: usize,
+
     total_invalid_files: usize,
     total_valid_files: usize,
     total_megabytes_scraped: f32,
     total_time: f32,
+
+    min_txt_seq_len: usize,
 }
 
 impl Scraper {
@@ -53,6 +61,8 @@ impl Scraper {
             .unwrap();
 
         let args = Args::parse();
+
+        self.min_txt_seq_len = args.min_pt_len;
 
         let chunk_size = 1024 * 1024 * args.chunk_size;
         self.chunk_size = chunk_size;
@@ -83,6 +93,8 @@ impl Scraper {
     }
 
     fn process_chunk(&mut self, raw: &[u8], start: &SystemTime) {
+        self.extract_plain_text(raw);
+
         for i in 0..raw.len() - 12 {
             for scraper in self.scrapers.iter() {
                 if scraper.file_detected(&raw[i..]) {
@@ -122,6 +134,30 @@ impl Scraper {
             .as_secs_f32();
         self.total_megabytes_scraped += raw.len() as f32 / (1028. * 1028.);
         self.chunk_report();
+    }
+
+    fn extract_plain_text(&self, raw: &[u8]) {
+        // matches sequences of printable ASCII characters (0x20 to 0x7E)
+        let pattern = format!(r"[\x20-\x7E]{{{},}}", self.min_txt_seq_len);
+        let regex = regex::Regex::new(&pattern).expect("Invalid regex pattern");
+        let mut found_texts = Vec::new();
+
+        for match_result in regex.find_iter(&raw.iter().map(|b| *b as char).collect::<String>()) {
+            found_texts.push(String::from(match_result.as_str()));
+        }
+
+        if !found_texts.is_empty() {
+            Command::new("mkdir")
+                .arg("-p")
+                .arg("extract/regex plain text")
+                .output()
+                .unwrap();
+
+            let output = found_texts.join("\n\n##############\n\n");
+            let name = format!("extract/plain text/chunk{}.txt", self.chunk);
+            std::fs::write(&name, &output)
+                .unwrap_or_else(|_| panic!("could not write file to {}", &name));
+        }
     }
 
     fn chunk_report(&self) {
